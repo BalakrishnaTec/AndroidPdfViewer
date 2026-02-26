@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+    <TargetFramework>net10.0-android</TargetFramework>
+    <Nullable>enable</Nullable>
+    <Title>Android PDF Viewer</Title>
+    <PackageId>Plugin.Android.PdfViewer</PackageId>
+    <Version>1.0.1</Version>
+    <Description>Android PDF rendering library using native PdfRenderer with zoom support and alignment for 16 KB page-size requirements.</Description>
+    <Company>Spacewell Mobile team</Company>
+    <IsTrimmable>true</IsTrimmable>
+    </PropertyGroup>
+    <ItemGroup>
+      <PackageReference Include="Xamarin.AndroidX.AppCompat" Version="1.7.1.2" />
+      <PackageReference Include="Xamarin.AndroidX.Core" Version="1.17.0.1" />
+      <PackageReference Include="Xamarin.AndroidX.RecyclerView" Version="1.4.0.4" />
+    </ItemGroup>
+</Project>
