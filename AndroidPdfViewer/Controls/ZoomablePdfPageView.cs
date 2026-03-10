@@ -27,14 +27,20 @@ public class ZoomablePdfPageView : FrameLayout
     private int _currentBitmapWidth;
     private int _currentBitmapHeight;
     private float _lastRenderedZoom = 1f;
-    private float _gestureFocusX;
-    private float _gestureFocusY;
+    private float _gestureFocusX = float.NaN;
+    private float _gestureFocusY = float.NaN;
     private float _panX;
     private float _panY;
     private int _activePointerId = -1;
     private float _lastTouchX;
     private float _lastTouchY;
     private float _lastNotifiedZoom = -1f;
+
+    private bool HasGestureFocus =>
+        !float.IsNaN(_gestureFocusX) &&
+        !float.IsInfinity(_gestureFocusX) &&
+        !float.IsNaN(_gestureFocusY) &&
+        !float.IsInfinity(_gestureFocusY);
 
     public ZoomablePdfPageView(Context context) : this(context, null)
     {
@@ -65,7 +71,7 @@ public class ZoomablePdfPageView : FrameLayout
 
     public float MaxZoom { get; set; } = 6f;
 
-    public float DoubleTapZoom { get; set; } = 4f;
+    public float DoubleTapZoom { get; set; } = 2f;
 
     public float ZoomFactor => _zoomFactor;
 
@@ -165,17 +171,22 @@ public class ZoomablePdfPageView : FrameLayout
             ? Height / 2f
             : Math.Clamp(focusY, 0f, Math.Max(0f, Height));
 
+        var hasAnchorPoint = TryMapViewPointToContentPoint(_gestureFocusX, _gestureFocusY, out var contentX, out var contentY);
+
         var zoomThreshold = MinZoom + 0.01f;
         if (_zoomFactor > zoomThreshold)
         {
             _zoomFactor = MinZoom;
-            _panX = 0f;
-            _panY = 0f;
         }
         else
         {
             var targetZoom = Math.Max(MinZoom + 0.1f, DoubleTapZoom);
             _zoomFactor = Math.Clamp(targetZoom, MinZoom, MaxZoom);
+        }
+
+        if (hasAnchorPoint)
+        {
+            UpdatePanToKeepContentAtFocus(contentX, contentY, _gestureFocusX, _gestureFocusY);
         }
 
         _isScaling = false;
@@ -199,6 +210,8 @@ public class ZoomablePdfPageView : FrameLayout
                 _activePointerId = e.GetPointerId(0);
                 _lastTouchX = e.GetX(0);
                 _lastTouchY = e.GetY(0);
+                _gestureFocusX = Math.Clamp(_lastTouchX, 0f, Math.Max(0f, Width));
+                _gestureFocusY = Math.Clamp(_lastTouchY, 0f, Math.Max(0f, Height));
                 if (CanPanCurrentView())
                 {
                     Parent?.RequestDisallowInterceptTouchEvent(true);
@@ -218,6 +231,8 @@ public class ZoomablePdfPageView : FrameLayout
 
                         _lastTouchX = touchX;
                         _lastTouchY = touchY;
+                        _gestureFocusX = Math.Clamp(touchX, 0f, Math.Max(0f, Width));
+                        _gestureFocusY = Math.Clamp(touchY, 0f, Math.Max(0f, Height));
 
                         _panX += deltaX;
                         _panY += deltaY;
@@ -310,6 +325,61 @@ public class ZoomablePdfPageView : FrameLayout
         ViewStateChanged?.Invoke(_zoomFactor, _panX, _panY);
     }
 
+    private bool TryMapViewPointToContentPoint(float viewX, float viewY, out float contentX, out float contentY)
+    {
+        contentX = 0f;
+        contentY = 0f;
+
+        if (_imageMatrix is null)
+        {
+            return false;
+        }
+
+        using var inverseMatrix = new Matrix();
+        if (!_imageMatrix.Invert(inverseMatrix))
+        {
+            return false;
+        }
+
+        var points = new[] { viewX, viewY };
+        inverseMatrix.MapPoints(points);
+
+        if (float.IsNaN(points[0]) || float.IsInfinity(points[0]) || float.IsNaN(points[1]) || float.IsInfinity(points[1]))
+        {
+            return false;
+        }
+
+        contentX = points[0];
+        contentY = points[1];
+        return true;
+    }
+
+    private void UpdatePanToKeepContentAtFocus(float contentX, float contentY, float focusX, float focusY)
+    {
+        if (_currentBitmapWidth <= 0 || _currentBitmapHeight <= 0 || Width <= 0 || Height <= 0)
+        {
+            return;
+        }
+
+        var relativeScale = _lastRenderedZoom > 0f
+            ? Math.Clamp(_zoomFactor / _lastRenderedZoom, 0.25f, 8f)
+            : 1f;
+        var maxPreviewRelativeScale = GetMaxPreviewRelativeScale();
+        relativeScale = Math.Clamp(relativeScale, 0.25f, maxPreviewRelativeScale);
+
+        var dx = (Width - _currentBitmapWidth) / 2f;
+        var dy = (Height - _currentBitmapHeight) / 2f;
+
+        var pivotX = HasGestureFocus ? Math.Clamp(_gestureFocusX, 0f, Width) : Width / 2f;
+        var pivotY = HasGestureFocus ? Math.Clamp(_gestureFocusY, 0f, Height) : Height / 2f;
+
+        var baseTranslateX = dx + (1f - relativeScale) * pivotX;
+        var baseTranslateY = dy + (1f - relativeScale) * pivotY;
+
+        _panX = focusX - (contentX * relativeScale + baseTranslateX);
+        _panY = focusY - (contentY * relativeScale + baseTranslateY);
+    }
+
     private void ApplyGesturePreviewMatrix()
     {
         if (_currentBitmapWidth <= 0 || _currentBitmapHeight <= 0 || Width <= 0 || Height <= 0)
@@ -328,8 +398,8 @@ public class ZoomablePdfPageView : FrameLayout
 
         var dx = (Width - _currentBitmapWidth) / 2f;
         var dy = (Height - _currentBitmapHeight) / 2f;
-        var pivotX = _gestureFocusX > 0f ? _gestureFocusX : Width / 2f;
-        var pivotY = _gestureFocusY > 0f ? _gestureFocusY : Height / 2f;
+        var pivotX = HasGestureFocus ? Math.Clamp(_gestureFocusX, 0f, Width) : Width / 2f;
+        var pivotY = HasGestureFocus ? Math.Clamp(_gestureFocusY, 0f, Height) : Height / 2f;
 
         var contentWidth = _currentBitmapWidth * relativeScale;
         var contentHeight = _currentBitmapHeight * relativeScale;
@@ -359,10 +429,8 @@ public class ZoomablePdfPageView : FrameLayout
             _panY = Math.Clamp(_panY, minPanY, maxPanY);
         }
 
-        _imageMatrix.PostTranslate(dx, dy);
-
         _imageMatrix.PostScale(relativeScale, relativeScale, pivotX, pivotY);
-        _imageMatrix.PostTranslate(_panX, _panY);
+        _imageMatrix.PostTranslate(dx + _panX, dy + _panY);
         _imageView.ImageMatrix = _imageMatrix;
         NotifyViewStateChanged();
     }
@@ -479,6 +547,21 @@ public class ZoomablePdfPageView : FrameLayout
             Post(() =>
             {
                 var previousBitmap = _imageView.Drawable as Android.Graphics.Drawables.BitmapDrawable;
+                var previousContentX = 0f;
+                var previousContentY = 0f;
+                var hadAnchorBeforeBitmapSwap =
+                    HasGestureFocus &&
+                    _currentBitmapWidth > 0 &&
+                    _currentBitmapHeight > 0 &&
+                    TryMapViewPointToContentPoint(_gestureFocusX, _gestureFocusY, out previousContentX, out previousContentY);
+
+                var previousContentRatioX = hadAnchorBeforeBitmapSwap
+                    ? previousContentX / _currentBitmapWidth
+                    : 0f;
+                var previousContentRatioY = hadAnchorBeforeBitmapSwap
+                    ? previousContentY / _currentBitmapHeight
+                    : 0f;
+
                 _imageView.SetImageBitmap(bitmap);
                 _currentBitmapWidth = bitmap.Width;
                 _currentBitmapHeight = bitmap.Height;
@@ -494,6 +577,16 @@ public class ZoomablePdfPageView : FrameLayout
                 }
 
                 _zoomFactor = _lastRenderedZoom;
+
+                if (hadAnchorBeforeBitmapSwap)
+                {
+                    var mappedContentX = Math.Clamp(previousContentRatioX, 0f, 1f) * _currentBitmapWidth;
+                    var mappedContentY = Math.Clamp(previousContentRatioY, 0f, 1f) * _currentBitmapHeight;
+                    var focusX = HasGestureFocus ? Math.Clamp(_gestureFocusX, 0f, Width) : Width / 2f;
+                    var focusY = HasGestureFocus ? Math.Clamp(_gestureFocusY, 0f, Height) : Height / 2f;
+                    UpdatePanToKeepContentAtFocus(mappedContentX, mappedContentY, focusX, focusY);
+                }
+
                 ApplyCenteredImageMatrix(bitmap);
                 previousBitmap?.Bitmap?.Dispose();
             });
